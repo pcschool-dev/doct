@@ -106,6 +106,10 @@
         // (ของเดิมส่งต่อเฉพาะ ?id= จึงทิ้ง code/state ทั้งคู่)
         let forward = new URLSearchParams(idUID);
         WRAPPER_ONLY.forEach(function (k) { forward.delete(k); });
+        // กลับมาจากหน้ายืนยันของ Telegram : Telegram ส่งผลมาท้ายลิงก์ (#tgAuthResult=...) ซึ่งเซิร์ฟเวอร์มองไม่เห็น
+        // -> ย้ายเป็น ?tgAuthResult= ส่งต่อให้ /exec (แอปตรวจว่าเครื่องนี้เพิ่งกดปุ่ม Telegram เอง และเซิร์ฟเวอร์ตรวจลายมือชื่อด้วย bot token)
+        let tgResult = new URLSearchParams(location.hash.slice(1)).get('tgAuthResult');
+        if (tgResult) forward.set('tgAuthResult', tgResult);
         let extra = forward.toString();
 
         // sep ต้องคิดจาก URL ที่ต่อ query แล้ว ไม่ใช่จาก baseUrl อย่างเดียว
@@ -177,7 +181,7 @@
             //   "คำขอหมดอายุหรือถูกใช้ไปแล้ว" ทั้งที่เพิ่งเข้าสำเร็จ)
             // - ลิงก์ที่ผู้ใช้เผลอคัดลอกส่งต่อจะไม่มีรหัสติดไปด้วย
             // ไม่แตะกรณี ?id= เพราะเป็นลิงก์เปิดหนังสือที่ควรรีเฟรชแล้วยังอยู่ที่เดิม
-            if (param.get('code') || param.get('state') || param.get('error')) {
+            if (param.get('code') || param.get('state') || param.get('error') || tgResult) {
                 try { history.replaceState(null, '', location.pathname); } catch (e) { }
             }
 
