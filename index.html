@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>ระบบรับหนังสือราชการ (T)</title>
+    <link rel="icon" type="image/x-icon" href="Logo.png">
+    <script src="https://unpkg.com/@dotlottie/player-component@2.7.12/dist/dotlottie-player.mjs" type="module"></script>
+    <!-- ปุ่มเข้าสู่ระบบด้วย Google (ครู/บุคลากร) — โค้ดชุดเดียวกับหน้า /ask (ระบบประเมินครู) -->
+    <script src="https://accounts.google.com/gsi/client" async onload="window.gReady && window.gReady()"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden; /* ป้องกันการเลื่อนหน้าจอขณะโหลด */
+        }
+        iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border: none;
+        } 
+        /* ปุ่ม Google (ครู/บุคลากร) วางทับช่อง #gSlot ในการ์ดเข้าสู่ระบบของแอปตามพิกัดที่แอปส่งมา
+           ปุ่มต้องอยู่หน้านี้ เพราะ Google รับปุ่มเฉพาะโดเมนที่ลงทะเบียน (กรอบ Apps Script ลงทะเบียนไม่ได้)
+           พื้นขาวทึบปิดข้อความ "กำลังโหลดปุ่ม" ในช่องของแอปให้มิด */
+        #gfloat { display: none; position: fixed; z-index: 5; align-items: center; justify-content: center;
+                  background: #fff; border-radius: 999px; }
+        #gfloat.on { display: flex; }
+        /* ปุ่มสำรองเมื่อปุ่มของ Google ไม่ขึ้น (เบราว์เซอร์ในแอป LINE/Facebook) — หน้าตาเลียนปุ่ม Google */
+        #gfb { width: 100%; height: 40px; border: 1px solid #dadce0; border-radius: 999px; background: #fff; color: #3c4043;
+          font: 500 14px/1 'Sarabun', sans-serif; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; }
+        #gfb .gfb-g { font-weight: 700; color: #4285f4; font-size: 16px; }
+        /* สร้าง Class ส่วนกลางสำหรับจัดกึ่งกลาง */
+        .full-screen-center {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: #ffffff;
+            z-index: 9999;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <!-- หน้าแจ้งเตือน Facebook (ปรับให้ใช้ class กึ่งกลาง) -->
+    <div id="FBloading" class="full-screen-center" style="display:none;">
+        <h4 style="font-family: 'Sarabun', sans-serif; line-height: 1.6;">
+            โปรดเปิดด้วย เบราว์เซอร์ภายนอก <br>
+            <span style="color: #666; font-size: 0.9em;">Please open in external browser.</span>
+        </h4>       
+    </div>  
+
+    <!-- หน้า Loading หลัก -->
+    <div id="loading" class="full-screen-center" style="transition: opacity 0.5s ease-out;">
+        <dotlottie-player src="https://lottie.host/3924723b-b000-47d9-877a-48fc904e0c67/UiIOpIdURz.lottie" 
+            background="transparent" speed="1" style="width: 300px; height: 300px" loop autoplay>
+        </dotlottie-player>
+        <h4 style="color: #333; font-family: 'Sarabun', sans-serif; font-weight: bold; margin-top: 20px;">
+            กำลังตรวจสอบความปลอดภัย
+        </h4>
+        <!-- ลิงก์สำรองแบบกดเอง (ซ่อนไว้ก่อน โผล่เมื่อรอนานเกินไป) -->
+        <a id="directLink" href="#" target="_top"
+            style="display:none; margin-top:18px; color:#1d4ed8; font-family:'Sarabun',sans-serif; font-size:0.95em; text-decoration:underline;">
+            ถ้าหน้าไม่แสดง คลิกที่นี่เพื่อเปิดโดยตรง
+        </a>
+    </div>
+
+    <!-- iframe หลักสำหรับแสดงระบบ (ซ่อนไว้จนกว่าจะโหลดสำเร็จ) -->
+    <iframe id="link" style="display:none" scrolling="auto" src=""></iframe>
+    <div id="gfloat" role="region" aria-label="เข้าสู่ระบบด้วย Google"><div id="gbtn"></div><button type="button" id="gfb" style="display:none"></button></div>
+
+    <script type="text/javascript">
+        let preloader = document.getElementById("loading");
+        let FBloading = document.getElementById("FBloading");
+        let link = document.getElementById("link");
+        let directLink = document.getElementById("directLink");
+        let idUID = window.location.search;
+        let param = new URLSearchParams(idUID);
+        let id = param.get('fbclid');
+
+        // พารามิเตอร์ที่เป็นของ "หน้าครอบ" หรือของ LINE เอง -- ไม่ต้องส่งต่อให้แอป
+        //   t                   ตัวกันแคชของหน้านี้เอง (ใส่ใหม่ทุกครั้งอยู่แล้ว)
+        //   fbclid              ตัวติดของ Facebook ใช้ตัดสินว่าจะขึ้นหน้าเตือนให้เปิดเบราว์เซอร์ภายนอก
+        //   openExternalBrowser LINE อ่านเองตอนเปิดลิงก์จากแชท แอปไม่ได้ใช้
+        const WRAPPER_ONLY = ['t', 'fbclid', 'openExternalBrowser'];
+
+        // ส่ง query ที่เหลือต่อให้ /exec ทั้งหมด
+        // จำเป็นเพราะหน้านี้ถูกใช้เป็น Callback URL ของ LINE Login ด้วย -- ขากลับจากหน้าอนุญาต
+        // ของ LINE จะมี ?code=&state= (หรือ ?error= ถ้ากดยกเลิก) ติดมา และ doGet ฝั่ง Apps Script
+        // อ่านสามตัวนี้จาก e.parameter เพื่อฝัง __LINE_BOOT__ ลงหน้า ถ้าหน้านี้ไม่ส่งต่อ
+        // การแลกโทเคนจะไม่เริ่มเลย ผู้ใช้เด้งกลับมาหน้าเข้าสู่ระบบเหมือนไม่มีอะไรเกิดขึ้น
+        // (ของเดิมส่งต่อเฉพาะ ?id= จึงทิ้ง code/state ทั้งคู่)
+        let forward = new URLSearchParams(idUID);
+        WRAPPER_ONLY.forEach(function (k) { forward.delete(k); });
+        let extra = forward.toString();
+
+        // sep ต้องคิดจาก URL ที่ต่อ query แล้ว ไม่ใช่จาก baseUrl อย่างเดียว
+        // ของเดิมคิดจาก baseUrl ล้วน เวลาเรียกพร้อม ?id=... จึงได้ ...exec?id=123?t=... มี ? สองตัว
+        function getNoCacheUrl(baseUrl, query = "") {
+            let url = baseUrl + (query ? (baseUrl.includes('?') ? '&' : '?') + query : '');
+            return url + (url.includes('?') ? '&' : '?') + "t=" + new Date().getTime();
+        }
+
+        const baseAppScript = "https://script.google.com/macros/s/AKfycbyqQ0I1CpT2Do-jWl1cn2HFFnmboEt2I0nd8l_NyPIwiHDZqFhRcO7Tvy-u6t6Nzi0LEQ/exec";
+
+        // ฟังก์ชันช่วยปิด Loading แบบนิ่มนวล
+        function hideLoader() {
+            preloader.style.opacity = '0';
+            setTimeout(() => {
+                preloader.style.display = 'none';
+            }, 500);
+        }
+
+        if(id){
+            preloader.style.display = 'none';
+            FBloading.style.display = 'flex'; // ใช้ flex เพื่อให้กึ่งกลาง
+            // ... (โค้ดหน่วงเวลาเดิมของคุณ) ...
+            let countDownDate = new Date(Date.now() + 15000).getTime();   	
+            let x = setTimeout(function(){
+                let now = new Date().getTime();
+                let distance = countDownDate - now;                
+                let seconds = Math.floor((distance % (1000 * 60)) / 1000);
+                if(seconds == 13){
+                    FBloading.innerHTML = `<iframe scrolling="auto" src="openExternalBrowser.mp4"></iframe>`
+                } else if(seconds <= 0){
+                    clearInterval(x);
+                    window.location.href = 'https://pcschool-dev.github.io/doct/'
+                }  				
+            }, 1000); // ทุก ๆ 1 วิ
+        
+        } else {
+            let finalUrl = getNoCacheUrl(baseAppScript, extra);
+
+            let settled = false;
+
+            // สำรอง: ถ้าฝังใน iframe ไม่ได้ (เช่น โดน X-Frame-Options: SAMEORIGIN
+            // ตอน Google เด้งไปหน้า login) onload จะไม่ยิงภายในเวลาที่กำหนด
+            // -> เปลี่ยนไปเปิดลิงก์ /exec ตรง ๆ ทั้งแท็บ เพื่อให้ล็อกอิน/ใช้งานต่อได้
+            //
+            // ทางสำรองนี้พา code ไปด้วยโดยตั้งใจ: ถ้ากรอบโหลดไม่ขึ้นจริง แอปยังไม่เคยได้ code
+            // ใบนั้นจึงยังไม่ถูกใช้ ไปเปิดเต็มแท็บแล้วล็อกอินจบได้ตามปกติ
+            // กลับกัน ถ้ากรอบโหลดขึ้น การแลกโทเคนจะเริ่มหลังสคริปต์ในหน้าทำงาน ซึ่ง onload
+            // ยิงตามมาก่อนครบ 10 วินาทีอยู่แล้ว -> settled แล้ว ไม่มีทางยิง code ใบเดิมซ้ำ
+            let fallbackTimer = setTimeout(function () {
+                if (settled) return;
+                settled = true;
+                window.location.replace(finalUrl);
+            }, 10000); // เวลารอ iframe ก่อนตัดสินใจ fallback (มิลลิวินาที) — ปรับได้
+
+            // ใช้ iframe เป็นหลัก: ถ้าโหลดในกรอบสำเร็จ -> ยกเลิก fallback แล้วแสดงเต็มจอ
+            link.onload = function () {
+                if (settled) return;
+                settled = true;
+                clearTimeout(fallbackTimer);
+                hideLoader();
+                link.style.display = 'block';
+            };
+            // console.log("finalUrl",finalUrl);
+            link.src = finalUrl;
+
+            // ส่งต่อให้แอปแล้ว -> ล้าง code/state ออกจากแถบที่อยู่
+            // - กดรีเฟรชแล้วไม่ยิง code ใบเดิมซ้ำ (ใบหนึ่งใช้ได้ครั้งเดียว ครั้งที่สองขึ้น
+            //   "คำขอหมดอายุหรือถูกใช้ไปแล้ว" ทั้งที่เพิ่งเข้าสำเร็จ)
+            // - ลิงก์ที่ผู้ใช้เผลอคัดลอกส่งต่อจะไม่มีรหัสติดไปด้วย
+            // ไม่แตะกรณี ?id= เพราะเป็นลิงก์เปิดหนังสือที่ควรรีเฟรชแล้วยังอยู่ที่เดิม
+            if (param.get('code') || param.get('state') || param.get('error')) {
+                try { history.replaceState(null, '', location.pathname); } catch (e) { }
+            }
+
+            // ลิงก์สำรองแบบกดเอง — โผล่ขึ้นถ้ารอนานเกินไป (ตาข่ายกันพลาด
+            // เผื่อบางเบราว์เซอร์ตรวจการบล็อก iframe อัตโนมัติไม่ได้)
+            directLink.href = finalUrl;
+            setTimeout(function () {
+                if (!settled) directLink.style.display = 'inline-block';
+            }, 3000); // เวลาโผล่ลิงก์สำรอง (มิลลิวินาที) — ปรับได้
+        }
+
+        /*
+         * ปุ่มเข้าสู่ระบบด้วย Google (ครู/บุคลากร) — คู่กับ GSSO ใน GoogleSSO.html และ GoogleLogin.js ของระบบรับหนังสือ
+         *   แอป → หน้านี้ { tes:'auth', state:'login'|'in'|'logout' } / { tes:'gslot', rect } (ช่องในการ์ด, null = ซ่อน)
+         *   หน้านี้ → แอป { tes:'gwrap' } (มีปุ่มจริง แอปจึงเว้นช่อง) / { tes:'gcred', credential } (ผลจาก Google)
+         * พิกัดของแอปนับจากมุมกรอบ — บวกตำแหน่งกรอบบนหน้านี้แล้ววางปุ่มทับ (กรอบชั้นในของ Apps Script ชิดมุมพอดี)
+         * ส่ง credential กลับไปที่หน้าต่างที่ส่งข้อความมาเท่านั้น (ev.source + ev.origin ของกรอบ Apps Script)
+         * auto_select: เคยกดปุ่มกับระบบไหนของโรงเรียนแล้ว เปิดที่นี่ก็เข้าเอง — ออกจากระบบแล้วปิด auto
+         */
+        var GOOGLE_CLIENT_ID = '557466410691-3h5k0b5mdoan0p8ojrfbpvbs8icgi6q2.apps.googleusercontent.com';
+        var gApp = null, gOrigin = '', gInit = false, gWant = false, gNoAuto = false, gPrompted = false;
+        var gRect = null, gBtnW = 0;
+        var gFloat = document.getElementById('gfloat');
+
+        function gReadyNow() { return !!(window.google && google.accounts && google.accounts.id); }
+
+        function gInitOnce() {
+          if (gInit || !gReadyNow()) return gInit;
+          gInit = true;
+          google.accounts.id.initialize({ client_id: GOOGLE_CLIENT_ID, callback: gCallback, auto_select: true,
+            hd: 'pcschool.ac.th', context: 'signin', ux_mode: 'popup', use_fedcm_for_prompt: true,
+            cancel_on_tap_outside: false });
+          return true;
+        }
+
+        /*
+         * เบราว์เซอร์ในแอป (LINE, Facebook, Instagram) — Google ไม่ยอมวาดปุ่มลงชื่อเข้าใช้ในเว็บวิวของแอป
+         * (รอบแรกเข้าได้เพราะ Google เข้าให้อัตโนมัติ พอออกจากระบบซึ่งปิดการเข้าอัตโนมัติ ก็ไม่เหลือทางเข้า — ต.ค. 2569)
+         * จึงแสดงปุ่มของเราเอง "เปิดในเบราว์เซอร์" แทน: LINE เปิด URL ที่มี openExternalBrowser=1 ใน Safari/Chrome ให้เอง
+         */
+        var gInApp = /\bLine\/|FBAN|FBAV|Instagram/i.test(navigator.userAgent);
+        var gFbTimer = 0;
+
+        function gFallback(kind) {
+          var fb = document.getElementById('gfb'), btn = document.getElementById('gbtn');
+          if (!kind) { fb.style.display = 'none'; btn.style.display = ''; return; }
+          btn.style.display = 'none';
+          fb.style.display = 'flex';
+          if (kind === 'open') {
+            fb.innerHTML = '<span class="gfb-g">G</span>เปิดในเบราว์เซอร์เพื่อเข้าด้วย Google';
+            fb.onclick = function () {
+              var u = new URL(location.href);
+              u.searchParams.set('openExternalBrowser', '1');
+              location.href = u.toString();
+            };
+          } else {
+            // ปุ่มของ Google ไม่ขึ้นด้วยเหตุอื่น — เรียกหน้าต่างเลือกบัญชีของ Google ตรง ๆ (ยังต้องกดเลือกบัญชีเอง)
+            fb.innerHTML = '<span class="gfb-g">G</span>ลงชื่อเข้าใช้ด้วย Google';
+            fb.onclick = function () {
+              if (gReadyNow()) google.accounts.id.prompt(); else location.reload();
+            };
+          }
+        }
+
+        function gPlace() {
+          if (!gWant || !gRect) { gFloat.classList.remove('on'); return; }
+          var fr = link.getBoundingClientRect();
+          gFloat.style.left = (fr.left + gRect.x) + 'px';
+          // Apps Script บัญชีส่วนตัวมีแถบแจ้งเตือนของ Google เหนือกรอบชั้นใน (ปิดได้) — แอปส่ง vh มา จึงหาระยะแถบได้จากส่วนต่างความสูง
+          var off = gRect.vh > 0 ? Math.max(0, fr.height - gRect.vh) : 0;
+          gFloat.style.top = (fr.top + off + gRect.y) + 'px';
+          gFloat.style.width = gRect.w + 'px';
+          gFloat.style.height = gRect.h + 'px';
+          gFloat.classList.add('on');
+          if (gInApp) { gFallback('open'); return; }
+          if (!gInitOnce()) {
+            // สคริปต์ Google ยังไม่มา (เน็ตช้า/ถูกบล็อก) — รอ 4 วิแล้วให้ปุ่มสำรอง ไม่ปล่อยช่องว่างค้าง
+            clearTimeout(gFbTimer);
+            gFbTimer = setTimeout(function () { if (gWant && !gInitOnce()) gFallback('prompt'); }, 4000);
+            return;
+          }
+          // ปุ่มของ Google กว้างได้ 200–400px — วาดใหม่เมื่อความกว้างช่องเปลี่ยนจริง (หมุนจอ) หรือเพิ่งกลับมาแสดง
+          var w = Math.max(200, Math.min(400, Math.floor(gRect.w)));
+          if (Math.abs(w - gBtnW) > 4) {
+            gBtnW = w;
+            gFallback('');
+            google.accounts.id.renderButton(document.getElementById('gbtn'), { theme: 'outline', size: 'large',
+              text: 'signin_with', shape: 'pill', locale: 'th', width: w });
+            // วาดแล้วแต่ไม่มีปุ่มจริงโผล่ใน 3 วิ (เบราว์เซอร์ที่ Google ไม่รองรับ) — สลับเป็นปุ่มสำรอง
+            clearTimeout(gFbTimer);
+            gFbTimer = setTimeout(function () {
+              // วัดความสูงของปุ่มที่ Google วาดจริง — ปุ่มเป็น div ส่วน iframe ของ Google เป็นตัวช่วยที่สูง 0 (วัด iframe = เข้าใจผิดว่าไม่มีปุ่ม)
+              if (gWant && !(document.getElementById('gbtn').getBoundingClientRect().height > 10)) gFallback('prompt');
+            }, 3000);
+          }
+          if (!gNoAuto && !gPrompted) { gPrompted = true; google.accounts.id.prompt(); }
+        }
+        window.gReady = gPlace;
+        window.addEventListener('resize', gPlace);
+
+        function gCallback(resp) {
+          if (!resp || !resp.credential || !gApp) return;
+          // ซ่อนปุ่มทันทีระหว่างแอปตรวจ (แอปขึ้นหน้ารอทับการ์ด) — กันกดซ้ำ แอปส่งพิกัดใหม่มาเองถ้าไม่สำเร็จ
+          gRect = null; gFloat.classList.remove('on');
+          gApp.postMessage({ tes: 'gcred', credential: resp.credential }, gOrigin);
+        }
+
+        window.addEventListener('message', function (ev) {
+          var d = ev.data;
+          if (!d || (d.tes !== 'auth' && d.tes !== 'gslot') || !/\.googleusercontent\.com$/.test(String(ev.origin))) return;
+          gApp = ev.source; gOrigin = ev.origin;
+          if (d.tes === 'gslot') { gRect = d.rect || null; gPlace(); return; }
+          if (d.state === 'login') {
+            gWant = true;
+            try { gApp.postMessage({ tes: 'gwrap' }, gOrigin); } catch (e) { }
+            gPlace();
+          } else {
+            gWant = false; gRect = null; gPrompted = false;
+            // ปุ่มที่ซ่อนไปแล้ว (เข้าระบบ/ออกจากระบบ) ต้องวาดใหม่ตอนกลับมา — ของเดิมค้างว่างบน iOS จนเห็นแค่ "กำลังโหลดปุ่ม"
+            gBtnW = 0;
+            gFloat.classList.remove('on');
+            try { google.accounts.id.cancel(); } catch (e) { }
+            if (d.state === 'logout') {
+              gNoAuto = true;
+              try { google.accounts.id.disableAutoSelect(); } catch (e) { }
+            }
+          }
+        });
+    </script>
+</body>    
+</html>
