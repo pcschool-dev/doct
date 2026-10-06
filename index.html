@@ -181,7 +181,8 @@
             //   "คำขอหมดอายุหรือถูกใช้ไปแล้ว" ทั้งที่เพิ่งเข้าสำเร็จ)
             // - ลิงก์ที่ผู้ใช้เผลอคัดลอกส่งต่อจะไม่มีรหัสติดไปด้วย
             // ไม่แตะกรณี ?id= เพราะเป็นลิงก์เปิดหนังสือที่ควรรีเฟรชแล้วยังอยู่ที่เดิม
-            if (param.get('code') || param.get('state') || param.get('error') || tgResult) {
+            // ?acctlogin= (ตั๋วใช้ครั้งเดียวจากบัญชีผู้ใช้กลาง) ก็ล้างด้วย : รีเฟรชแล้วไม่ยิงตั๋วที่ใช้ไปแล้วซ้ำ
+            if (param.get('code') || param.get('state') || param.get('error') || tgResult || param.get('acctlogin')) {
                 try { history.replaceState(null, '', location.pathname); } catch (e) { }
             }
 
